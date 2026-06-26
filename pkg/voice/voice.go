@@ -169,7 +169,7 @@ func buildRouterPrompt(sessions []string) string {
 	return `You convert a single spoken instruction (already transcribed) into exactly one terminal action, returned as a JSON object and nothing else.
 
 Available actions:
-- {"type":"dictate","text":"<verbatim text to type>"} - THE DEFAULT. Use for anything that is content to type into the terminal or into Claude Code, not an explicit control command.
+- {"type":"dictate"} - THE DEFAULT. Use for anything that is content to be typed into the terminal or into Claude Code rather than an explicit control command. Do NOT include or rewrite the text: the exact transcript is typed verbatim.
 - {"type":"submit"} - press Enter to submit the current input.
 - {"type":"key","name":"<enter|escape|ctrl_c|tab|backspace|up|down|left|right>"} - press one special key.
 - {"type":"switch_session","target":"<session name>"} - switch to another tmux session.
@@ -182,7 +182,7 @@ Available tmux sessions: ` + sessionList + `.
 
 Rules:
 - If the instruction is clearly a navigation, control, copy or paste command, emit that action.
-- Otherwise treat the instruction as dictation: {"type":"dictate","text": the verbatim transcript}.
+- Otherwise treat the instruction as dictation by returning {"type":"dictate"} (the transcript is typed exactly as spoken, so never reword, summarize or correct it).
 - When in doubt, prefer dictate.
 - For switch_session, map spoken references like "instance two", "session two" or "number two" to the closest matching session name from the list above.
 - Respond with ONLY the JSON object.`
@@ -208,10 +208,10 @@ func Validate(a Action, sessions []string, transcript string) Action {
 
 	switch a.Type {
 	case "dictate":
-		if strings.TrimSpace(a.Text) == "" {
-			a.Text = transcript
-		}
-		return Action{Type: "dictate", Text: a.Text}
+		// Always dictate the verbatim transcript, never the router's text. The
+		// router only decides whether something is dictation; it must not
+		// rephrase the content (that caused garbled/rewritten typing).
+		return Action{Type: "dictate", Text: transcript}
 
 	case "submit":
 		return Action{Type: "submit"}

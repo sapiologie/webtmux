@@ -11,17 +11,12 @@ func TestValidateFallsBackToDictate(t *testing.T) {
 	}
 }
 
-func TestValidateDictateKeepsModelText(t *testing.T) {
-	got := Validate(Action{Type: "dictate", Text: "run the tests"}, nil, "raw transcript")
-	if got.Type != "dictate" || got.Text != "run the tests" {
-		t.Fatalf("expected model text preserved, got %+v", got)
-	}
-}
-
-func TestValidateEmptyDictateUsesTranscript(t *testing.T) {
-	got := Validate(Action{Type: "dictate", Text: "  "}, nil, "fallback text")
-	if got.Text != "fallback text" {
-		t.Fatalf("expected transcript fallback, got %+v", got)
+func TestValidateDictateUsesTranscriptVerbatim(t *testing.T) {
+	// The router must never reword dictation: even when it returns its own
+	// (possibly rewritten) text, Validate replaces it with the exact transcript.
+	got := Validate(Action{Type: "dictate", Text: "a reworded version"}, nil, "the exact words I said")
+	if got.Type != "dictate" || got.Text != "the exact words I said" {
+		t.Fatalf("expected verbatim transcript, got %+v", got)
 	}
 }
 
