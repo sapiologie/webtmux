@@ -6,15 +6,18 @@ class WebtmuxMobileControls extends LitElement {
     showPaneSelector: { type: Boolean },
     showSessionSelector: { type: Boolean },
     layout: { type: Object },
+    recording: { type: Boolean },
+    voiceStatus: { type: String },
+    showHelp: { type: Boolean },
+    newSessionName: { type: String },
+    renameValue: { type: String },
+    copyText: { type: String },
   };
 
   static styles = css`
     :host {
       display: block;
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      position: relative;
       background: #16213e;
       border-top: 1px solid #0f3460;
       padding: 6px;
@@ -247,6 +250,138 @@ class WebtmuxMobileControls extends LitElement {
       border-color: #4a9eff;
       color: #fff;
     }
+
+    .new-session-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .new-session-input {
+      flex: 1;
+      min-width: 0;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    .new-session-input::placeholder {
+      color: #667;
+    }
+
+    .session-action-btn {
+      flex-shrink: 0;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #4a9eff;
+      padding: 10px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .session-action-btn:active {
+      background: #0f3460;
+    }
+
+    .copy-text {
+      width: 100%;
+      min-height: 120px;
+      box-sizing: border-box;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #eaeaea;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: Menlo, Monaco, 'Courier New', monospace;
+      margin-bottom: 12px;
+      resize: none;
+    }
+
+    .control-btn.mic {
+      background: #2d6a4f;
+      border-color: #2d6a4f;
+      color: #fff;
+      touch-action: none;
+    }
+
+    .control-btn.mic.recording {
+      background: #e94560;
+      border-color: #e94560;
+      animation: mic-pulse 1s ease-in-out infinite;
+    }
+
+    @keyframes mic-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .voice-toast {
+      position: absolute;
+      bottom: 100%;
+      left: 8px;
+      right: 8px;
+      margin-bottom: 8px;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #eaeaea;
+      padding: 10px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      word-break: break-word;
+    }
+
+    .help-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .help-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+
+    .help-say {
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .help-do {
+      color: #888;
+      font-size: 12px;
+    }
+
+    /* On touch devices the bar sits at the top of the screen (see index.html),
+       so pop the toast and pane selector downward into the screen instead of
+       upward off the top edge. */
+    @media (pointer: coarse) {
+      .voice-toast {
+        top: 100%;
+        bottom: auto;
+        margin-top: 8px;
+        margin-bottom: 0;
+      }
+
+      .pane-selector {
+        top: 100%;
+        bottom: auto;
+        border-top: none;
+        border-bottom: 1px solid #0f3460;
+      }
+    }
   `;
 
   constructor() {
@@ -254,21 +389,35 @@ class WebtmuxMobileControls extends LitElement {
     this.showPaneSelector = false;
     this.showSessionSelector = false;
     this.layout = null;
+    this.recording = false;
+    this.voiceStatus = '';
+    this.showHelp = false;
+    this.newSessionName = '';
+    this.renameValue = '';
+    this.copyText = '';
+    this._wantRecording = false;
+    this._mediaRecorder = null;
+    this._chunks = [];
+    this._stream = null;
+    this._statusTimer = null;
 
     window.addEventListener('tmux-layout-update', (e) => {
       this.layout = e.detail;
+    });
+    window.addEventListener('voice-copy-fallback', (e) => {
+      this.copyText = e.detail || '';
     });
   }
 
   render() {
     const sessions = this.layout?.sessions || [];
-    const showSessionBtn = sessions.length > 1;
+    const showSessionBtn = true;
 
     return html`
       <!-- Session overlay -->
       <div class="session-overlay ${this.showSessionSelector ? 'open' : ''}" @click=${this.closeSessionSelector}>
         <div class="session-modal" @click=${(e) => e.stopPropagation()}>
-          <h3>Switch Session</h3>
+          <h3>Sessions</h3>
           <div class="session-list">
             ${sessions.map(sess => html`
               <button
@@ -279,6 +428,58 @@ class WebtmuxMobileControls extends LitElement {
                 <span class="session-meta">${sess.windows} window${sess.windows !== 1 ? 's' : ''}</span>
               </button>
             `)}
+          </div>
+          <div class="new-session-row">
+            <input
+              class="new-session-input"
+              placeholder="new session name"
+              .value=${this.newSessionName}
+              @click=${(e) => e.stopPropagation()}
+              @input=${(e) => { this.newSessionName = e.target.value; }}
+              @keydown=${(e) => { if (e.key === 'Enter') this.createSession(); }}
+            >
+            <button class="session-action-btn" @click=${this.createSession}>+ Create</button>
+          </div>
+          <div class="new-session-row">
+            <input
+              class="new-session-input"
+              placeholder="rename current session to..."
+              .value=${this.renameValue}
+              @click=${(e) => e.stopPropagation()}
+              @input=${(e) => { this.renameValue = e.target.value; }}
+              @keydown=${(e) => { if (e.key === 'Enter') this.renameCurrent(); }}
+            >
+            <button class="session-action-btn" @click=${this.renameCurrent}>Rename</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Copy result overlay (tap-to-copy fallback for browsers that block clipboard writes without a gesture) -->
+      <div class="session-overlay ${this.copyText ? 'open' : ''}" @click=${this.closeCopy}>
+        <div class="session-modal" @click=${(e) => e.stopPropagation()}>
+          <h3>Copied text</h3>
+          <textarea class="copy-text" readonly .value=${this.copyText}></textarea>
+          <div class="new-session-row">
+            <button class="session-action-btn" @click=${this.doCopy}>Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Help overlay: available voice commands -->
+      <div class="session-overlay ${this.showHelp ? 'open' : ''}" @click=${this.closeHelp}>
+        <div class="session-modal" @click=${(e) => e.stopPropagation()}>
+          <h3>Voice commands</h3>
+          <div class="help-list">
+            <div class="help-item"><span class="help-say">Just speak</span><span class="help-do">types exactly what you say</span></div>
+            <div class="help-item"><span class="help-say">"submit" / "press enter"</span><span class="help-do">presses Enter</span></div>
+            <div class="help-item"><span class="help-say">"scroll up" / "scroll down"</span><span class="help-do">scrolls the history</span></div>
+            <div class="help-item"><span class="help-say">"switch to session two"</span><span class="help-do">switches tmux session</span></div>
+            <div class="help-item"><span class="help-say">"new session called build"</span><span class="help-do">creates and switches to it</span></div>
+            <div class="help-item"><span class="help-say">"rename session to api"</span><span class="help-do">renames the current session</span></div>
+            <div class="help-item"><span class="help-say">"copy the screen" / "copy all"</span><span class="help-do">copies to the clipboard</span></div>
+            <div class="help-item"><span class="help-say">"paste"</span><span class="help-do">pastes the clipboard</span></div>
+            <div class="help-item"><span class="help-say">"press escape" / "interrupt"</span><span class="help-do">Esc / Ctrl-C</span></div>
+            <div class="help-item"><span class="help-say">"press tab"</span><span class="help-do">Tab</span></div>
           </div>
         </div>
       </div>
@@ -306,11 +507,36 @@ class WebtmuxMobileControls extends LitElement {
               ${win.index}: ${win.name || 'bash'}
             </button>
           `)}
-          <button class="window-tab" @click=${this.newWindow}>+</button>
         </div>
       ` : ''}
 
+      ${this.voiceStatus ? html`<div class="voice-toast">${this.voiceStatus}</div>` : ''}
+
       <div class="controls">
+        <button
+          class="control-btn mic ${this.recording ? 'recording' : ''}"
+          @pointerdown=${this.startRecording}
+          @pointerup=${this.stopRecording}
+          @pointercancel=${this.stopRecording}
+          @contextmenu=${(e) => e.preventDefault()}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="2" width="6" height="11" rx="3"/>
+            <path d="M5 10v1a7 7 0 0 0 14 0v-1"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+          ${this.recording ? 'Rec' : 'Voice'}
+        </button>
+
+        <button class="control-btn" @click=${this.toggleHelp}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          Help
+        </button>
+
         ${showSessionBtn ? html`
           <button class="control-btn session-btn" @click=${this.toggleSessionSelector}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -355,15 +581,6 @@ class WebtmuxMobileControls extends LitElement {
           </svg>
           Panes
         </button>
-
-        <button class="control-btn" @click=${this.newWindow}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <line x1="12" y1="8" x2="12" y2="16"/>
-            <line x1="8" y1="12" x2="16" y2="12"/>
-          </svg>
-          New
-        </button>
       </div>
     `;
   }
@@ -391,10 +608,6 @@ class WebtmuxMobileControls extends LitElement {
     window.webtmux?.selectWindow(windowId);
   }
 
-  newWindow() {
-    window.webtmux?.newWindow();
-  }
-
   toggleSessionSelector() {
     this.showSessionSelector = !this.showSessionSelector;
   }
@@ -406,6 +619,174 @@ class WebtmuxMobileControls extends LitElement {
   switchSession(sessionName) {
     window.webtmux?.switchSession(sessionName);
     this.showSessionSelector = false;
+  }
+
+  createSession() {
+    const name = (this.newSessionName || '').trim();
+    if (!name) return;
+    window.webtmux?.newSession(name);
+    this.newSessionName = '';
+    this.showSessionSelector = false;
+  }
+
+  renameCurrent() {
+    const newName = (this.renameValue || '').trim();
+    const active = this.layout?.sessions?.find(s => s.active)?.name;
+    if (!newName || !active) return;
+    window.webtmux?.renameSession(active, newName);
+    this.renameValue = '';
+    this.showSessionSelector = false;
+  }
+
+  // --- Voice (push-to-talk) ---------------------------------------------------
+
+  async startRecording(e) {
+    if (e) e.preventDefault();
+    if (this._wantRecording) return;
+    // Set the intent synchronously so a fast pointerup (which runs before the
+    // async getUserMedia resolves) can cancel it instead of leaving the mic open.
+    this._wantRecording = true;
+    this.recording = true;
+
+    // Keep receiving pointer events even if the finger slides off the button.
+    if (e && e.pointerId != null && e.target.setPointerCapture) {
+      try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this._wantRecording = false;
+      this.recording = false;
+      this.flashStatus('Mic unavailable (needs HTTPS)');
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      this._wantRecording = false;
+      this.recording = false;
+      this.flashStatus('Mic access denied');
+      return;
+    }
+
+    // The tap may have ended before the mic opened; if so, don't start.
+    if (!this._wantRecording) {
+      stream.getTracks().forEach(t => t.stop());
+      this.recording = false;
+      return;
+    }
+    this._stream = stream;
+
+    this._chunks = [];
+    let mimeType = '';
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) {
+        mimeType = c;
+        break;
+      }
+    }
+
+    try {
+      this._mediaRecorder = mimeType
+        ? new MediaRecorder(this._stream, { mimeType })
+        : new MediaRecorder(this._stream);
+    } catch (err) {
+      this._mediaRecorder = new MediaRecorder(this._stream);
+    }
+
+    this._mediaRecorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) this._chunks.push(ev.data);
+    };
+    this._mediaRecorder.onstop = () => this.uploadRecording();
+    this._mediaRecorder.start();
+  }
+
+  stopRecording(e) {
+    if (e) e.preventDefault();
+    if (!this._wantRecording) return;
+    this._wantRecording = false;
+    this.recording = false;
+    if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+      this._mediaRecorder.stop();
+    }
+  }
+
+  async uploadRecording() {
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+      this._stream = null;
+    }
+    if (!this._chunks.length) return;
+
+    const type = (this._mediaRecorder && this._mediaRecorder.mimeType) || 'audio/webm';
+    const blob = new Blob(this._chunks, { type });
+    this._chunks = [];
+    const ext = (type.includes('mp4') || type.includes('aac')) ? 'mp4' : 'webm';
+
+    const form = new FormData();
+    form.append('audio', blob, `voice.${ext}`);
+
+    this.flashStatus('Transcribing...', 0);
+    try {
+      const resp = await fetch('./voice', { method: 'POST', body: form });
+      if (!resp.ok) {
+        this.flashStatus('Voice error: ' + resp.status);
+        return;
+      }
+      const data = await resp.json();
+      this.flashStatus(`"${data.transcript}" -> ${this.describeAction(data.action)}`);
+      window.webtmux?.dispatchVoiceAction(data.action);
+    } catch (err) {
+      this.flashStatus('Voice request failed');
+    }
+  }
+
+  describeAction(a) {
+    if (!a) return 'nothing';
+    switch (a.type) {
+      case 'dictate': return 'type';
+      case 'submit': return 'submit';
+      case 'key': return 'key ' + a.name;
+      case 'switch_session': return 'session ' + a.target;
+      case 'new_session': return 'new session ' + a.target;
+      case 'rename_session': return 'rename ' + a.target;
+      case 'select_window': return 'window ' + a.index;
+      case 'scroll': return 'scroll ' + a.dir;
+      case 'copy': return 'copy';
+      case 'paste': return 'paste';
+      default: return a.type;
+    }
+  }
+
+  flashStatus(msg, timeout = 4000) {
+    this.voiceStatus = msg;
+    if (this._statusTimer) clearTimeout(this._statusTimer);
+    if (timeout > 0) {
+      this._statusTimer = setTimeout(() => { this.voiceStatus = ''; }, timeout);
+    }
+  }
+
+  toggleHelp() {
+    this.showHelp = !this.showHelp;
+  }
+
+  closeHelp() {
+    this.showHelp = false;
+  }
+
+  closeCopy() {
+    this.copyText = '';
+  }
+
+  async doCopy() {
+    try {
+      await navigator.clipboard.writeText(this.copyText);
+    } catch (e) {
+      console.warn('Copy failed:', e);
+    }
+    this.copyText = '';
   }
 }
 

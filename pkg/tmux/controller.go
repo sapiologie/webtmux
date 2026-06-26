@@ -11,6 +11,7 @@ import (
 // Controller manages tmux interactions for a session
 type Controller struct {
 	sessionName string
+	sessionMu   sync.RWMutex
 
 	layoutCache *Layout
 	layoutMu    sync.RWMutex
@@ -30,15 +31,46 @@ func NewController(sessionName string) (*Controller, error) {
 	return c, nil
 }
 
+// session returns the current session name under a read lock. sessionName is
+// read by the 500ms poller and the voice HTTP handler while being written by
+// the websocket goroutine (Switch/New/RenameSession), so all access is guarded.
+func (c *Controller) session() string {
+	c.sessionMu.RLock()
+	defer c.sessionMu.RUnlock()
+	return c.sessionName
+}
+
+func (c *Controller) setSession(name string) {
+	c.sessionMu.Lock()
+	c.sessionName = name
+	c.sessionMu.Unlock()
+}
+
+// SanitizeSessionName turns a user-supplied (typed or spoken) name into a
+// tmux-safe session name. tmux uses '.' and ':' in target syntax, leading '-'
+// is parsed as a flag, and control characters (incl. the newline used as the
+// rename wire delimiter) must never reach a command, so all are collapsed to
+// '-' and stripped from the ends.
+func SanitizeSessionName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '.' || r == ':' || r == ' ' || r == '\t' {
+			return '-'
+		}
+		return r
+	}, name)
+	return strings.Trim(name, "-")
+}
+
 // Start initializes the controller and gets initial layout
 func (c *Controller) Start() error {
+	session := c.session()
 	// Check if tmux session exists, create if not
-	cmd := exec.Command("tmux", "has-session", "-t", c.sessionName)
+	cmd := exec.Command("tmux", "has-session", "-t", session)
 	if err := cmd.Run(); err != nil {
 		// Session doesn't exist, create it
-		createCmd := exec.Command("tmux", "new-session", "-d", "-s", c.sessionName)
+		createCmd := exec.Command("tmux", "new-session", "-d", "-s", session)
 		if createErr := createCmd.Run(); createErr != nil {
-			return fmt.Errorf("failed to create tmux session %s: %w", c.sessionName, createErr)
+			return fmt.Errorf("failed to create tmux session %s: %w", session, createErr)
 		}
 	}
 
@@ -70,8 +102,10 @@ func (c *Controller) GetLayout() *Layout {
 
 // RefreshLayout fetches the current tmux layout
 func (c *Controller) RefreshLayout() error {
+	current := c.session()
+
 	// Get session info
-	sessionOut, err := c.runTmux("display-message", "-t", c.sessionName, "-p", "#{session_id},#{session_name}")
+	sessionOut, err := c.runTmux("display-message", "-t", current, "-p", "#{session_id},#{session_name}")
 	if err != nil {
 		return err
 	}
@@ -103,14 +137,14 @@ func (c *Controller) RefreshLayout() error {
 				Name:     parts[1],
 				Windows:  winCount,
 				Attached: attached,
-				Active:   parts[1] == c.sessionName,
+				Active:   parts[1] == current,
 			}
 			layout.Sessions = append(layout.Sessions, sess)
 		}
 	}
 
 	// Get windows
-	windowsOut, err := c.runTmux("list-windows", "-t", c.sessionName, "-F", "#{window_id},#{window_name},#{window_index},#{window_active}")
+	windowsOut, err := c.runTmux("list-windows", "-t", current, "-F", "#{window_id},#{window_name},#{window_index},#{window_active}")
 	if err != nil {
 		return err
 	}
@@ -140,7 +174,7 @@ func (c *Controller) RefreshLayout() error {
 
 		// Get panes for this window
 		panesOut, err := c.runTmux("list-panes", "-t", win.ID, "-F",
-			"#{pane_id},#{pane_index},#{pane_active},#{pane_width},#{pane_height},#{pane_top},#{pane_left},#{pane_current_command},#{pane_title}")
+			"#{pane_id},#{pane_index},#{pane_active},#{pane_width},#{pane_height},#{pane_top},#{pane_left},#{pane_current_command},#{mouse_any_flag},#{pane_title}")
 		if err != nil {
 			continue
 		}
@@ -150,7 +184,7 @@ func (c *Controller) RefreshLayout() error {
 				continue
 			}
 			paneParts := strings.Split(paneLine, ",")
-			if len(paneParts) < 9 {
+			if len(paneParts) < 10 {
 				continue
 			}
 
@@ -170,7 +204,8 @@ func (c *Controller) RefreshLayout() error {
 				Top:     top,
 				Left:    left,
 				Command: paneParts[7],
-				Title:   paneParts[8],
+				MouseOn: paneParts[8] == "1",
+				Title:   paneParts[9],
 			}
 
 			if paneActive && active {
@@ -216,7 +251,7 @@ func (c *Controller) SwitchSession(sessionName string) error {
 	if err != nil {
 		return err
 	}
-	c.sessionName = sessionName
+	c.setSession(sessionName)
 	c.RefreshLayout()
 	return nil
 }
@@ -227,7 +262,7 @@ func (c *Controller) SplitPane(horizontal bool) error {
 	if horizontal {
 		flag = "-h"
 	}
-	_, err := c.runTmux("split-window", "-t", c.sessionName, flag)
+	_, err := c.runTmux("split-window", "-t", c.session(), flag)
 	if err != nil {
 		return err
 	}
@@ -247,46 +282,96 @@ func (c *Controller) ClosePane(paneID string) error {
 
 // EnterCopyMode enters copy mode on the active pane
 func (c *Controller) EnterCopyMode() error {
-	_, err := c.runTmux("copy-mode", "-t", c.sessionName)
+	_, err := c.runTmux("copy-mode", "-t", c.session())
 	return err
 }
 
 // ExitCopyMode exits copy mode
 func (c *Controller) ExitCopyMode() error {
-	_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "cancel")
+	_, err := c.runTmux("send-keys", "-t", c.session(), "-X", "cancel")
 	return err
 }
 
-// ScrollUp scrolls up in copy mode
-func (c *Controller) ScrollUp(lines int) error {
-	for i := 0; i < lines; i++ {
-		_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "scroll-up")
-		if err != nil {
-			return err
-		}
+// scroll moves the copy-mode viewport by lines using a single command. A
+// per-line loop spawned one tmux process and one redraw per line, which flooded
+// the websocket on a fast swipe and dropped the connection.
+func (c *Controller) scroll(command string, lines int) error {
+	if lines <= 0 {
+		lines = 1
 	}
-	return nil
+	_, err := c.runTmux("send-keys", "-t", c.session(), "-X", "-N", strconv.Itoa(lines), command)
+	return err
 }
 
-// ScrollDown scrolls down in copy mode
+// ScrollUp scrolls up by lines in copy mode.
+func (c *Controller) ScrollUp(lines int) error {
+	return c.scroll("scroll-up", lines)
+}
+
+// ScrollDown scrolls down by lines in copy mode.
 func (c *Controller) ScrollDown(lines int) error {
-	for i := 0; i < lines; i++ {
-		_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "scroll-down")
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return c.scroll("scroll-down", lines)
 }
 
 // NewWindow creates a new window
 func (c *Controller) NewWindow() error {
-	_, err := c.runTmux("new-window", "-t", c.sessionName)
+	_, err := c.runTmux("new-window", "-t", c.session())
 	if err != nil {
 		return err
 	}
 	c.RefreshLayout()
 	return nil
+}
+
+// NewSession creates a new detached session with a sanitized name and switches
+// the current client to it.
+func (c *Controller) NewSession(name string) error {
+	name = SanitizeSessionName(name)
+	if name == "" {
+		return fmt.Errorf("invalid session name")
+	}
+	if _, err := c.runTmux("new-session", "-d", "-s", name); err != nil {
+		return err
+	}
+	if _, err := c.runTmux("switch-client", "-t", name); err != nil {
+		return err
+	}
+	c.setSession(name)
+	c.RefreshLayout()
+	return nil
+}
+
+// RenameSession renames the target session to a sanitized newName. If the
+// target is the current session, the tracked name is updated too.
+func (c *Controller) RenameSession(target, newName string) error {
+	newName = SanitizeSessionName(newName)
+	if newName == "" {
+		return fmt.Errorf("invalid session name")
+	}
+	if _, err := c.runTmux("rename-session", "-t", target, newName); err != nil {
+		return err
+	}
+	if target == c.session() {
+		c.setSession(newName)
+	}
+	c.RefreshLayout()
+	return nil
+}
+
+// CapturePaneOf returns the text content of the active pane of the given
+// session. If all is true the entire scrollback history is captured, otherwise
+// only the visible screen.
+func (c *Controller) CapturePaneOf(session string, all bool) (string, error) {
+	args := []string{"capture-pane", "-p", "-t", session}
+	if all {
+		args = append(args, "-S", "-")
+	}
+	return c.runTmux(args...)
+}
+
+// CapturePane captures the controller's current session.
+func (c *Controller) CapturePane(all bool) (string, error) {
+	return c.CapturePaneOf(c.session(), all)
 }
 
 // runTmux executes a tmux command with the given arguments
@@ -298,4 +383,3 @@ func (c *Controller) runTmux(args ...string) (string, error) {
 	}
 	return string(output), nil
 }
-

@@ -60,10 +60,14 @@ const (
 	// Raw tmux command
 	TmuxSendCommand = 'A'
 	// Scroll in copy mode (payload: lines as string)
-	TmuxScrollUp = 'B'
+	TmuxScrollUp   = 'B'
 	TmuxScrollDown = 'C'
 	// Create new window
 	TmuxNewWindow = 'D'
 	// Switch session by name
 	TmuxSwitchSession = 'E'
+	// Create a new session by name
+	TmuxNewSession = 'F'
+	// Rename a session (payload: "target\nnewName")
+	TmuxRenameSession = 'G'
 )
