@@ -21,9 +21,14 @@
       overflow: hidden;
       background: #1a1a2e;
     }
-    #app {
+    body {
       display: flex;
-      height: 100%;
+      flex-direction: column;
+    }
+    #app {
+      flex: 1;
+      min-height: 0;
+      display: flex;
       width: 100%;
     }
     #terminal-container {
@@ -62,8 +67,8 @@
     <webtmux-sidebar id="sidebar" class="hidden lg:block"></webtmux-sidebar>
   </div>
 
-  <!-- Mobile controls (shown on small screens) -->
-  <webtmux-mobile-controls class="lg:hidden"></webtmux-mobile-controls>
+  <!-- Controls bar (voice, prefix, splits, sessions) - shown on all screen sizes -->
+  <webtmux-mobile-controls></webtmux-mobile-controls>
 
   <script src="./auth_token.js"></script>
   <script src="./config.js"></script>

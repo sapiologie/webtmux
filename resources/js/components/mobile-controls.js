@@ -13,10 +13,7 @@ class WebtmuxMobileControls extends LitElement {
   static styles = css`
     :host {
       display: block;
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      position: relative;
       background: #16213e;
       border-top: 1px solid #0f3460;
       padding: 6px;
