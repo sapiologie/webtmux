@@ -23,6 +23,8 @@ const MSG = {
   TmuxScrollDown: 'C',
   TmuxNewWindow: 'D',
   TmuxSwitchSession: 'E',
+  TmuxNewSession: 'F',
+  TmuxRenameSession: 'G',
 
   // Output (server -> client)
   Output: '1',
@@ -406,6 +408,16 @@ class WebTmux {
     this.sendMessage(MSG.TmuxSwitchSession, sessionName);
   }
 
+  newSession(name) {
+    if (!name) return;
+    this.sendMessage(MSG.TmuxNewSession, name);
+  }
+
+  renameSession(target, newName) {
+    if (!target || !newName) return;
+    this.sendMessage(MSG.TmuxRenameSession, target + '\n' + newName);
+  }
+
   enterCopyMode() {
     this.sendMessage(MSG.TmuxCopyMode, '1');
     this.inCopyMode = true;
@@ -488,6 +500,14 @@ class WebTmux {
       case 'switch_session':
         if (action.target) this.switchSession(action.target);
         break;
+      case 'new_session':
+        if (action.target) this.newSession(action.target);
+        break;
+      case 'rename_session': {
+        const active = this.layout?.sessions?.find(s => s.active)?.name;
+        if (active && action.target) this.renameSession(active, action.target);
+        break;
+      }
       case 'select_window': {
         const win = this.layout?.windows?.find(w => w.index === action.index);
         if (win) this.selectWindow(win.id);

@@ -3,6 +3,7 @@ package webtty
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 
 	"github.com/pkg/errors"
 	"webtmux/pkg/tmux"
@@ -22,6 +23,8 @@ type TmuxController interface {
 	ScrollUp(lines int) error
 	ScrollDown(lines int) error
 	NewWindow() error
+	NewSession(name string) error
+	RenameSession(target, newName string) error
 	Events() <-chan tmux.Event
 }
 
@@ -138,6 +141,23 @@ func (wt *WebTTY) handleTmuxMessage(msgType byte, payload []byte) error {
 		}
 		return wt.SendTmuxLayout()
 
+	case TmuxNewSession:
+		name := string(payload)
+		if err := wt.tmuxCtrl.NewSession(name); err != nil {
+			return errors.Wrap(err, "failed to create session")
+		}
+		return wt.SendTmuxLayout()
+
+	case TmuxRenameSession:
+		parts := strings.SplitN(string(payload), "\n", 2)
+		if len(parts) != 2 {
+			return errors.New("rename session requires target and new name")
+		}
+		if err := wt.tmuxCtrl.RenameSession(parts[0], parts[1]); err != nil {
+			return errors.Wrap(err, "failed to rename session")
+		}
+		return wt.SendTmuxLayout()
+
 	default:
 		return errors.Errorf("unknown tmux message type: %c", msgType)
 	}
@@ -148,7 +168,7 @@ func isTmuxMessage(msgType byte) bool {
 	switch msgType {
 	case TmuxSelectPane, TmuxSelectWindow, TmuxSplitPane, TmuxClosePane,
 		TmuxCopyMode, TmuxSendCommand, TmuxScrollUp, TmuxScrollDown, TmuxNewWindow,
-		TmuxSwitchSession:
+		TmuxSwitchSession, TmuxNewSession, TmuxRenameSession:
 		return true
 	default:
 		return false

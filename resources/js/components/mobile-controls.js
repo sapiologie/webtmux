@@ -9,6 +9,8 @@ class WebtmuxMobileControls extends LitElement {
     recording: { type: Boolean },
     voiceStatus: { type: String },
     showHelp: { type: Boolean },
+    newSessionName: { type: String },
+    renameValue: { type: String },
   };
 
   static styles = css`
@@ -248,6 +250,43 @@ class WebtmuxMobileControls extends LitElement {
       color: #fff;
     }
 
+    .new-session-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .new-session-input {
+      flex: 1;
+      min-width: 0;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    .new-session-input::placeholder {
+      color: #667;
+    }
+
+    .session-action-btn {
+      flex-shrink: 0;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #4a9eff;
+      padding: 10px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .session-action-btn:active {
+      background: #0f3460;
+    }
+
     .control-btn.mic {
       background: #2d6a4f;
       border-color: #2d6a4f;
@@ -337,6 +376,8 @@ class WebtmuxMobileControls extends LitElement {
     this.recording = false;
     this.voiceStatus = '';
     this.showHelp = false;
+    this.newSessionName = '';
+    this.renameValue = '';
     this._mediaRecorder = null;
     this._chunks = [];
     this._stream = null;
@@ -349,13 +390,13 @@ class WebtmuxMobileControls extends LitElement {
 
   render() {
     const sessions = this.layout?.sessions || [];
-    const showSessionBtn = sessions.length > 1;
+    const showSessionBtn = true;
 
     return html`
       <!-- Session overlay -->
       <div class="session-overlay ${this.showSessionSelector ? 'open' : ''}" @click=${this.closeSessionSelector}>
         <div class="session-modal" @click=${(e) => e.stopPropagation()}>
-          <h3>Switch Session</h3>
+          <h3>Sessions</h3>
           <div class="session-list">
             ${sessions.map(sess => html`
               <button
@@ -366,6 +407,28 @@ class WebtmuxMobileControls extends LitElement {
                 <span class="session-meta">${sess.windows} window${sess.windows !== 1 ? 's' : ''}</span>
               </button>
             `)}
+          </div>
+          <div class="new-session-row">
+            <input
+              class="new-session-input"
+              placeholder="new session name"
+              .value=${this.newSessionName}
+              @click=${(e) => e.stopPropagation()}
+              @input=${(e) => { this.newSessionName = e.target.value; }}
+              @keydown=${(e) => { if (e.key === 'Enter') this.createSession(); }}
+            >
+            <button class="session-action-btn" @click=${this.createSession}>+ Create</button>
+          </div>
+          <div class="new-session-row">
+            <input
+              class="new-session-input"
+              placeholder="rename current session to..."
+              .value=${this.renameValue}
+              @click=${(e) => e.stopPropagation()}
+              @input=${(e) => { this.renameValue = e.target.value; }}
+              @keydown=${(e) => { if (e.key === 'Enter') this.renameCurrent(); }}
+            >
+            <button class="session-action-btn" @click=${this.renameCurrent}>Rename</button>
           </div>
         </div>
       </div>
@@ -379,6 +442,8 @@ class WebtmuxMobileControls extends LitElement {
             <div class="help-item"><span class="help-say">"submit" / "press enter"</span><span class="help-do">presses Enter</span></div>
             <div class="help-item"><span class="help-say">"scroll up" / "scroll down"</span><span class="help-do">scrolls the history</span></div>
             <div class="help-item"><span class="help-say">"switch to session two"</span><span class="help-do">switches tmux session</span></div>
+            <div class="help-item"><span class="help-say">"new session called build"</span><span class="help-do">creates and switches to it</span></div>
+            <div class="help-item"><span class="help-say">"rename session to api"</span><span class="help-do">renames the current session</span></div>
             <div class="help-item"><span class="help-say">"copy the screen" / "copy all"</span><span class="help-do">copies to the clipboard</span></div>
             <div class="help-item"><span class="help-say">"paste"</span><span class="help-do">pastes the clipboard</span></div>
             <div class="help-item"><span class="help-say">"press escape" / "interrupt"</span><span class="help-do">Esc / Ctrl-C</span></div>
@@ -410,7 +475,6 @@ class WebtmuxMobileControls extends LitElement {
               ${win.index}: ${win.name || 'bash'}
             </button>
           `)}
-          <button class="window-tab" @click=${this.newWindow}>+</button>
         </div>
       ` : ''}
 
@@ -485,15 +549,6 @@ class WebtmuxMobileControls extends LitElement {
           </svg>
           Panes
         </button>
-
-        <button class="control-btn" @click=${this.newWindow}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <line x1="12" y1="8" x2="12" y2="16"/>
-            <line x1="8" y1="12" x2="16" y2="12"/>
-          </svg>
-          New
-        </button>
       </div>
     `;
   }
@@ -535,6 +590,23 @@ class WebtmuxMobileControls extends LitElement {
 
   switchSession(sessionName) {
     window.webtmux?.switchSession(sessionName);
+    this.showSessionSelector = false;
+  }
+
+  createSession() {
+    const name = (this.newSessionName || '').trim();
+    if (!name) return;
+    window.webtmux?.newSession(name);
+    this.newSessionName = '';
+    this.showSessionSelector = false;
+  }
+
+  renameCurrent() {
+    const newName = (this.renameValue || '').trim();
+    const active = this.layout?.sessions?.find(s => s.active)?.name;
+    if (!newName || !active) return;
+    window.webtmux?.renameSession(active, newName);
+    this.renameValue = '';
     this.showSessionSelector = false;
   }
 

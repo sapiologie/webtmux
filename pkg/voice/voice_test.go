@@ -59,3 +59,21 @@ func TestValidateCopyDefaultsToScreen(t *testing.T) {
 		t.Fatalf("expected copy screen, got %+v", got)
 	}
 }
+
+func TestValidateNewSessionSanitizes(t *testing.T) {
+	got := Validate(Action{Type: "new_session", Target: "my build.server"}, nil, "t")
+	if got.Type != "new_session" || got.Target != "my-build-server" {
+		t.Fatalf("expected sanitized new_session name, got %+v", got)
+	}
+
+	if Validate(Action{Type: "new_session", Target: "   "}, nil, "t").Type != "dictate" {
+		t.Fatalf("expected dictate for empty session name")
+	}
+}
+
+func TestValidateRenameSessionSanitizes(t *testing.T) {
+	got := Validate(Action{Type: "rename_session", Target: "api:v2"}, nil, "t")
+	if got.Type != "rename_session" || got.Target != "api-v2" {
+		t.Fatalf("expected sanitized rename, got %+v", got)
+	}
+}

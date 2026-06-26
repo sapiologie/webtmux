@@ -289,6 +289,33 @@ func (c *Controller) NewWindow() error {
 	return nil
 }
 
+// NewSession creates a new detached session with the given name and switches
+// the current client to it.
+func (c *Controller) NewSession(name string) error {
+	if _, err := c.runTmux("new-session", "-d", "-s", name); err != nil {
+		return err
+	}
+	if _, err := c.runTmux("switch-client", "-t", name); err != nil {
+		return err
+	}
+	c.sessionName = name
+	c.RefreshLayout()
+	return nil
+}
+
+// RenameSession renames the target session to newName. If the target is the
+// current session, the controller's tracked name is updated too.
+func (c *Controller) RenameSession(target, newName string) error {
+	if _, err := c.runTmux("rename-session", "-t", target, newName); err != nil {
+		return err
+	}
+	if target == c.sessionName {
+		c.sessionName = newName
+	}
+	c.RefreshLayout()
+	return nil
+}
+
 // CapturePane returns the text content of the active pane of the current
 // session. If all is true the entire scrollback history is captured, otherwise
 // only the visible screen.

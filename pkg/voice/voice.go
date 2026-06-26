@@ -173,6 +173,8 @@ Available actions:
 - {"type":"submit"} - press Enter to submit the current input.
 - {"type":"key","name":"<enter|escape|ctrl_c|tab|backspace|up|down|left|right>"} - press one special key.
 - {"type":"switch_session","target":"<session name>"} - switch to another tmux session.
+- {"type":"new_session","target":"<new session name>"} - create a new tmux session with the given name and switch to it.
+- {"type":"rename_session","target":"<new name>"} - rename the current session to the given name.
 - {"type":"select_window","index":<n>} - switch to window number n.
 - {"type":"scroll","dir":"<up|down>","amount":<lines>} - scroll the terminal history.
 - {"type":"copy","scope":"<screen|all>"} - copy the visible screen or full scrollback to the clipboard.
@@ -185,6 +187,7 @@ Rules:
 - Otherwise treat the instruction as dictation by returning {"type":"dictate"} (the transcript is typed exactly as spoken, so never reword, summarize or correct it).
 - When in doubt, prefer dictate.
 - For switch_session, map spoken references like "instance two", "session two" or "number two" to the closest matching session name from the list above.
+- For new_session and rename_session, derive a short, filesystem-friendly name from what the user said (e.g. "create a session for the build" -> "build").
 - Respond with ONLY the JSON object.`
 }
 
@@ -231,6 +234,20 @@ func Validate(a Action, sessions []string, transcript string) Action {
 			return dictate
 		}
 		return Action{Type: "switch_session", Target: target}
+
+	case "new_session":
+		name := sanitizeSessionName(a.Target)
+		if name == "" {
+			return dictate
+		}
+		return Action{Type: "new_session", Target: name}
+
+	case "rename_session":
+		name := sanitizeSessionName(a.Target)
+		if name == "" {
+			return dictate
+		}
+		return Action{Type: "rename_session", Target: name}
 
 	case "select_window":
 		if a.Index < 0 {
@@ -284,4 +301,20 @@ func matchSession(target string, sessions []string) string {
 		}
 	}
 	return ""
+}
+
+// sanitizeSessionName turns a spoken session name into a tmux-safe name. tmux
+// uses '.' and ':' in its target syntax and spaces are awkward, so collapse
+// those to '-'.
+func sanitizeSessionName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.Map(func(r rune) rune {
+		switch r {
+		case '.', ':', ' ', '\t':
+			return '-'
+		default:
+			return r
+		}
+	}, name)
+	return strings.Trim(name, "-")
 }
