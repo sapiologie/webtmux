@@ -257,26 +257,24 @@ func (c *Controller) ExitCopyMode() error {
 	return err
 }
 
-// ScrollUp scrolls up in copy mode
+// ScrollUp scrolls up by lines in copy mode in a single command. The previous
+// per-line loop spawned one tmux process and triggered one redraw per line,
+// flooding the websocket on a fast swipe and dropping the connection.
 func (c *Controller) ScrollUp(lines int) error {
-	for i := 0; i < lines; i++ {
-		_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "scroll-up")
-		if err != nil {
-			return err
-		}
+	if lines <= 0 {
+		lines = 1
 	}
-	return nil
+	_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "-N", strconv.Itoa(lines), "scroll-up")
+	return err
 }
 
-// ScrollDown scrolls down in copy mode
+// ScrollDown scrolls down by lines in copy mode in a single command.
 func (c *Controller) ScrollDown(lines int) error {
-	for i := 0; i < lines; i++ {
-		_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "scroll-down")
-		if err != nil {
-			return err
-		}
+	if lines <= 0 {
+		lines = 1
 	}
-	return nil
+	_, err := c.runTmux("send-keys", "-t", c.sessionName, "-X", "-N", strconv.Itoa(lines), "scroll-down")
+	return err
 }
 
 // NewWindow creates a new window

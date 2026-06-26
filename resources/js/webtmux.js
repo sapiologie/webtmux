@@ -287,17 +287,14 @@ class WebTmux {
     this.ws.onclose = () => {
       console.log('WebSocket closed');
 
-      // Check if there are other sessions to switch to
-      const otherSessions = this.layout?.sessions?.filter(s => !s.active) || [];
-      if (otherSessions.length > 0) {
-        // Auto-reconnect and switch to another session
-        this.pendingSessionSwitch = otherSessions[0].name;
-        console.log('Auto-reconnecting to session:', this.pendingSessionSwitch);
-        setTimeout(() => this.connect(), 500);
-      } else if (this.reconnectInterval) {
-        // Normal reconnect behavior
-        setTimeout(() => this.connect(), this.reconnectInterval * 1000);
+      // Reconnect to the SAME session we were on. The old code bounced to a
+      // different session on any drop, so a transient (e.g. scroll-induced)
+      // disconnect looked like "losing" the current tty.
+      const active = this.layout?.sessions?.find(s => s.active)?.name;
+      if (active) {
+        this.pendingSessionSwitch = active;
       }
+      setTimeout(() => this.connect(), 500);
     };
 
     this.ws.onerror = (error) => {
