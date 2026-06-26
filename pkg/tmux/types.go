@@ -38,6 +38,10 @@ type Pane struct {
 	Top     int    `json:"top"`
 	Left    int    `json:"left"`
 	Command string `json:"command"`
+	// MouseOn is true when the running app has mouse tracking enabled
+	// (#{mouse_any_flag}), e.g. a full-screen TUI like Claude Code. The client
+	// forwards wheel events to such panes instead of using tmux copy mode.
+	MouseOn bool   `json:"mouseOn"`
 	Title   string `json:"title"`
 }
 

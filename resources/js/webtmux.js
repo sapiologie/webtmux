@@ -189,6 +189,28 @@ class WebTmux {
     window.webtmux = this;
   }
 
+  isMouseApp() {
+    // True when the active pane's app has mouse tracking on (full-screen TUIs
+    // like Claude Code). Such apps scroll their own view from wheel events.
+    const win = this.layout?.windows?.find(w => w.active);
+    const pane = win?.panes?.find(p => p.active);
+    return !!pane?.mouseOn;
+  }
+
+  sendWheel(up, ticks = 1) {
+    // SGR mouse wheel (button 64 = up, 65 = down) at the center of the screen.
+    const btn = up ? 64 : 65;
+    const col = Math.max(1, Math.floor(this.terminal.cols / 2));
+    const row = Math.max(1, Math.floor(this.terminal.rows / 2));
+    let seq = '';
+    for (let i = 0; i < ticks; i++) {
+      seq += `\x1b[<${btn};${col};${row}M`;
+    }
+    const bytes = this.encoder.encode(seq);
+    const binary = String.fromCharCode(...bytes);
+    this.sendMessage(MSG.Input, btoa(binary));
+  }
+
   setupTouchHandling() {
     const container = document.getElementById('terminal');
     let touchStartY = 0;
@@ -203,6 +225,15 @@ class WebTmux {
       const threshold = 30;
 
       if (Math.abs(deltaY) > threshold) {
+        if (this.isMouseApp()) {
+          // Full-screen app (e.g. Claude Code): forward wheel ticks so it
+          // scrolls its own view instead of using tmux copy mode.
+          const ticks = Math.min(8, Math.max(1, Math.floor(Math.abs(deltaY) / 30)));
+          this.sendWheel(deltaY < 0, ticks);
+          touchStartY = e.touches[0].clientY;
+          return;
+        }
+
         if (!this.inCopyMode) {
           this.sendMessage(MSG.TmuxCopyMode, '1');
           this.inCopyMode = true;
@@ -224,6 +255,12 @@ class WebTmux {
 
     // Mouse wheel for desktop scroll -> copy mode
     this.terminal.attachCustomWheelEventHandler((event) => {
+      // Full-screen apps with mouse tracking handle their own scrolling; let
+      // xterm forward the wheel to them instead of hijacking into copy mode.
+      if (this.isMouseApp()) {
+        return true;
+      }
+
       // Only intercept scroll up (entering history) - deltaY < 0 = wheel up
       if (event.deltaY < 0) {
         if (!this.inCopyMode) {

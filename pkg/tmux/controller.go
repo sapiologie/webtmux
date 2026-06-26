@@ -140,7 +140,7 @@ func (c *Controller) RefreshLayout() error {
 
 		// Get panes for this window
 		panesOut, err := c.runTmux("list-panes", "-t", win.ID, "-F",
-			"#{pane_id},#{pane_index},#{pane_active},#{pane_width},#{pane_height},#{pane_top},#{pane_left},#{pane_current_command},#{pane_title}")
+			"#{pane_id},#{pane_index},#{pane_active},#{pane_width},#{pane_height},#{pane_top},#{pane_left},#{pane_current_command},#{mouse_any_flag},#{pane_title}")
 		if err != nil {
 			continue
 		}
@@ -150,7 +150,7 @@ func (c *Controller) RefreshLayout() error {
 				continue
 			}
 			paneParts := strings.Split(paneLine, ",")
-			if len(paneParts) < 9 {
+			if len(paneParts) < 10 {
 				continue
 			}
 
@@ -170,7 +170,8 @@ func (c *Controller) RefreshLayout() error {
 				Top:     top,
 				Left:    left,
 				Command: paneParts[7],
-				Title:   paneParts[8],
+				MouseOn: paneParts[8] == "1",
+				Title:   paneParts[9],
 			}
 
 			if paneActive && active {
