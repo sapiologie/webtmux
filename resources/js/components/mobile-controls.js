@@ -11,6 +11,7 @@ class WebtmuxMobileControls extends LitElement {
     showHelp: { type: Boolean },
     newSessionName: { type: String },
     renameValue: { type: String },
+    copyText: { type: String },
   };
 
   static styles = css`
@@ -287,6 +288,21 @@ class WebtmuxMobileControls extends LitElement {
       background: #0f3460;
     }
 
+    .copy-text {
+      width: 100%;
+      min-height: 120px;
+      box-sizing: border-box;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #eaeaea;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: Menlo, Monaco, 'Courier New', monospace;
+      margin-bottom: 12px;
+      resize: none;
+    }
+
     .control-btn.mic {
       background: #2d6a4f;
       border-color: #2d6a4f;
@@ -378,6 +394,8 @@ class WebtmuxMobileControls extends LitElement {
     this.showHelp = false;
     this.newSessionName = '';
     this.renameValue = '';
+    this.copyText = '';
+    this._wantRecording = false;
     this._mediaRecorder = null;
     this._chunks = [];
     this._stream = null;
@@ -385,6 +403,9 @@ class WebtmuxMobileControls extends LitElement {
 
     window.addEventListener('tmux-layout-update', (e) => {
       this.layout = e.detail;
+    });
+    window.addEventListener('voice-copy-fallback', (e) => {
+      this.copyText = e.detail || '';
     });
   }
 
@@ -429,6 +450,17 @@ class WebtmuxMobileControls extends LitElement {
               @keydown=${(e) => { if (e.key === 'Enter') this.renameCurrent(); }}
             >
             <button class="session-action-btn" @click=${this.renameCurrent}>Rename</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Copy result overlay (tap-to-copy fallback for browsers that block clipboard writes without a gesture) -->
+      <div class="session-overlay ${this.copyText ? 'open' : ''}" @click=${this.closeCopy}>
+        <div class="session-modal" @click=${(e) => e.stopPropagation()}>
+          <h3>Copied text</h3>
+          <textarea class="copy-text" readonly .value=${this.copyText}></textarea>
+          <div class="new-session-row">
+            <button class="session-action-btn" @click=${this.doCopy}>Copy</button>
           </div>
         </div>
       </div>
@@ -576,10 +608,6 @@ class WebtmuxMobileControls extends LitElement {
     window.webtmux?.selectWindow(windowId);
   }
 
-  newWindow() {
-    window.webtmux?.newWindow();
-  }
-
   toggleSessionSelector() {
     this.showSessionSelector = !this.showSessionSelector;
   }
@@ -614,7 +642,11 @@ class WebtmuxMobileControls extends LitElement {
 
   async startRecording(e) {
     if (e) e.preventDefault();
-    if (this.recording) return;
+    if (this._wantRecording) return;
+    // Set the intent synchronously so a fast pointerup (which runs before the
+    // async getUserMedia resolves) can cancel it instead of leaving the mic open.
+    this._wantRecording = true;
+    this.recording = true;
 
     // Keep receiving pointer events even if the finger slides off the button.
     if (e && e.pointerId != null && e.target.setPointerCapture) {
@@ -622,16 +654,29 @@ class WebtmuxMobileControls extends LitElement {
     }
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this._wantRecording = false;
+      this.recording = false;
       this.flashStatus('Mic unavailable (needs HTTPS)');
       return;
     }
 
+    let stream;
     try {
-      this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
+      this._wantRecording = false;
+      this.recording = false;
       this.flashStatus('Mic access denied');
       return;
     }
+
+    // The tap may have ended before the mic opened; if so, don't start.
+    if (!this._wantRecording) {
+      stream.getTracks().forEach(t => t.stop());
+      this.recording = false;
+      return;
+    }
+    this._stream = stream;
 
     this._chunks = [];
     let mimeType = '';
@@ -656,12 +701,12 @@ class WebtmuxMobileControls extends LitElement {
     };
     this._mediaRecorder.onstop = () => this.uploadRecording();
     this._mediaRecorder.start();
-    this.recording = true;
   }
 
   stopRecording(e) {
     if (e) e.preventDefault();
-    if (!this.recording) return;
+    if (!this._wantRecording) return;
+    this._wantRecording = false;
     this.recording = false;
     if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
       this._mediaRecorder.stop();
@@ -705,6 +750,8 @@ class WebtmuxMobileControls extends LitElement {
       case 'submit': return 'submit';
       case 'key': return 'key ' + a.name;
       case 'switch_session': return 'session ' + a.target;
+      case 'new_session': return 'new session ' + a.target;
+      case 'rename_session': return 'rename ' + a.target;
       case 'select_window': return 'window ' + a.index;
       case 'scroll': return 'scroll ' + a.dir;
       case 'copy': return 'copy';
@@ -727,6 +774,19 @@ class WebtmuxMobileControls extends LitElement {
 
   closeHelp() {
     this.showHelp = false;
+  }
+
+  closeCopy() {
+    this.copyText = '';
+  }
+
+  async doCopy() {
+    try {
+      await navigator.clipboard.writeText(this.copyText);
+    } catch (e) {
+      console.warn('Copy failed:', e);
+    }
+    this.copyText = '';
   }
 }
 

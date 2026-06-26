@@ -2,6 +2,7 @@ package webtty
 
 import (
 	"encoding/json"
+	"log"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,21 @@ func (wt *WebTTY) SendTmuxLayout() error {
 	return wt.masterWrite(append([]byte{TmuxLayoutUpdate}, data...))
 }
 
+// SendTmuxLayoutData sends an already-marshaled layout to the client, avoiding a
+// second json.Marshal on the 500ms poll hot path.
+func (wt *WebTTY) SendTmuxLayoutData(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
+	return wt.masterWrite(append([]byte{TmuxLayoutUpdate}, data...))
+}
+
+// SendTmuxError reports a failed tmux command to the client so it surfaces to
+// the user without tearing down the connection.
+func (wt *WebTTY) SendTmuxError(msg string) error {
+	return wt.masterWrite(append([]byte{TmuxError}, []byte(msg)...))
+}
+
 // SendTmuxModeUpdate sends the copy mode state to the client
 func (wt *WebTTY) SendTmuxModeUpdate(inCopyMode bool) error {
 	state := tmux.ModeState{
@@ -66,40 +82,53 @@ func (wt *WebTTY) SendTmuxModeUpdate(inCopyMode bool) error {
 	return wt.masterWrite(append([]byte{TmuxModeUpdate}, data...))
 }
 
-// handleTmuxMessage handles tmux-specific messages from the client
+// handleTmuxMessage handles tmux-specific messages from the client. A failed
+// tmux command is reported to the client but does NOT return an error, so a
+// user mistake (e.g. a duplicate session name) cannot tear down the websocket.
 func (wt *WebTTY) handleTmuxMessage(msgType byte, payload []byte) error {
 	if wt.tmuxCtrl == nil {
 		return nil // Silently ignore if no tmux controller
 	}
 
+	// run reports a failed operation to the client and keeps the connection
+	// alive; on success it pushes the updated layout. The only error it returns
+	// is a master-write failure (a genuinely dead connection).
+	run := func(err error) error {
+		if err != nil {
+			log.Printf("tmux operation failed: %v", err)
+			return wt.SendTmuxError(err.Error())
+		}
+		return wt.SendTmuxLayout()
+	}
+
 	switch msgType {
 	case TmuxSelectPane:
-		paneID := string(payload)
-		if err := wt.tmuxCtrl.SelectPane(paneID); err != nil {
-			return errors.Wrap(err, "failed to select pane")
-		}
-		return wt.SendTmuxLayout()
+		return run(wt.tmuxCtrl.SelectPane(string(payload)))
 
 	case TmuxSelectWindow:
-		windowID := string(payload)
-		if err := wt.tmuxCtrl.SelectWindow(windowID); err != nil {
-			return errors.Wrap(err, "failed to select window")
-		}
-		return wt.SendTmuxLayout()
+		return run(wt.tmuxCtrl.SelectWindow(string(payload)))
 
 	case TmuxSplitPane:
-		horizontal := string(payload) == "h"
-		if err := wt.tmuxCtrl.SplitPane(horizontal); err != nil {
-			return errors.Wrap(err, "failed to split pane")
-		}
-		return wt.SendTmuxLayout()
+		return run(wt.tmuxCtrl.SplitPane(string(payload) == "h"))
 
 	case TmuxClosePane:
-		paneID := string(payload)
-		if err := wt.tmuxCtrl.ClosePane(paneID); err != nil {
-			return errors.Wrap(err, "failed to close pane")
+		return run(wt.tmuxCtrl.ClosePane(string(payload)))
+
+	case TmuxNewWindow:
+		return run(wt.tmuxCtrl.NewWindow())
+
+	case TmuxSwitchSession:
+		return run(wt.tmuxCtrl.SwitchSession(string(payload)))
+
+	case TmuxNewSession:
+		return run(wt.tmuxCtrl.NewSession(string(payload)))
+
+	case TmuxRenameSession:
+		parts := strings.SplitN(string(payload), "\n", 2)
+		if len(parts) != 2 {
+			return wt.SendTmuxError("rename session requires a target and a new name")
 		}
-		return wt.SendTmuxLayout()
+		return run(wt.tmuxCtrl.RenameSession(parts[0], parts[1]))
 
 	case TmuxCopyMode:
 		enter := string(payload) == "1"
@@ -110,53 +139,24 @@ func (wt *WebTTY) handleTmuxMessage(msgType byte, payload []byte) error {
 			err = wt.tmuxCtrl.ExitCopyMode()
 		}
 		if err != nil {
-			return errors.Wrap(err, "failed to toggle copy mode")
+			log.Printf("tmux copy-mode failed: %v", err)
+			return nil
 		}
 		return wt.SendTmuxModeUpdate(enter)
 
 	case TmuxScrollUp:
 		lines, _ := strconv.Atoi(string(payload))
-		if lines <= 0 {
-			lines = 1
+		if err := wt.tmuxCtrl.ScrollUp(lines); err != nil {
+			log.Printf("tmux scroll-up failed: %v", err)
 		}
-		return wt.tmuxCtrl.ScrollUp(lines)
+		return nil
 
 	case TmuxScrollDown:
 		lines, _ := strconv.Atoi(string(payload))
-		if lines <= 0 {
-			lines = 1
+		if err := wt.tmuxCtrl.ScrollDown(lines); err != nil {
+			log.Printf("tmux scroll-down failed: %v", err)
 		}
-		return wt.tmuxCtrl.ScrollDown(lines)
-
-	case TmuxNewWindow:
-		if err := wt.tmuxCtrl.NewWindow(); err != nil {
-			return errors.Wrap(err, "failed to create new window")
-		}
-		return wt.SendTmuxLayout()
-
-	case TmuxSwitchSession:
-		sessionName := string(payload)
-		if err := wt.tmuxCtrl.SwitchSession(sessionName); err != nil {
-			return errors.Wrap(err, "failed to switch session")
-		}
-		return wt.SendTmuxLayout()
-
-	case TmuxNewSession:
-		name := string(payload)
-		if err := wt.tmuxCtrl.NewSession(name); err != nil {
-			return errors.Wrap(err, "failed to create session")
-		}
-		return wt.SendTmuxLayout()
-
-	case TmuxRenameSession:
-		parts := strings.SplitN(string(payload), "\n", 2)
-		if len(parts) != 2 {
-			return errors.New("rename session requires target and new name")
-		}
-		if err := wt.tmuxCtrl.RenameSession(parts[0], parts[1]); err != nil {
-			return errors.Wrap(err, "failed to rename session")
-		}
-		return wt.SendTmuxLayout()
+		return nil
 
 	default:
 		return errors.Errorf("unknown tmux message type: %c", msgType)

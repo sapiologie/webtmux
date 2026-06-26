@@ -35,6 +35,7 @@ const MSG = {
   SetBufferSize: '6',
   TmuxLayoutUpdate: '7',
   TmuxModeUpdate: '9',
+  TmuxError: 'B',
 };
 
 class WebTmux {
@@ -119,15 +120,7 @@ class WebTmux {
       // Allow Cmd+V / Ctrl+V to paste
       if ((ev.metaKey || ev.ctrlKey) && ev.key === 'v') {
         ev.preventDefault(); // Prevent browser's native paste
-        navigator.clipboard.readText().then(text => {
-          if (text) {
-            const bytes = this.encoder.encode(text);
-            const binary = String.fromCharCode(...bytes);
-            this.sendMessage(MSG.Input, btoa(binary));
-          }
-        }).catch(err => {
-          console.warn('Failed to paste:', err);
-        });
+        this.paste();
         return false; // Handled
       }
 
@@ -141,10 +134,7 @@ class WebTmux {
       };
 
       if (arrowMap[ev.key]) {
-        // Send raw CSI sequence
-        const seq = arrowMap[ev.key];
-        const binary = String.fromCharCode(...[...seq].map(c => c.charCodeAt(0)));
-        this.sendMessage(MSG.Input, btoa(binary));
+        this.sendInput(arrowMap[ev.key]);
         return false; // Prevent xterm.js default handling
       }
 
@@ -158,8 +148,7 @@ class WebTmux {
         };
         const key = ev.key.toLowerCase();
         if (ctrlMap[key]) {
-          const binary = String.fromCharCode(ctrlMap[key].charCodeAt(0));
-          this.sendMessage(MSG.Input, btoa(binary));
+          this.sendInput(ctrlMap[key]);
           return false;
         }
       }
@@ -173,10 +162,7 @@ class WebTmux {
         this.sendMessage(MSG.TmuxCopyMode, '0');
         this.inCopyMode = false;
       }
-      // Encode string to bytes, then to base64 (matches original gotty)
-      const bytes = this.encoder.encode(data);
-      const binary = String.fromCharCode(...bytes);
-      this.sendMessage(MSG.Input, btoa(binary));
+      this.sendInput(data);
     });
 
     // Setup touch/scroll handling for copy mode
@@ -197,18 +183,23 @@ class WebTmux {
     return !!pane?.mouseOn;
   }
 
+  // sendInput encodes a string and sends it as terminal input. A loop (not a
+  // spread) avoids a RangeError when the input is large (e.g. a big paste).
+  sendInput(text) {
+    const bytes = this.encoder.encode(text);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    this.sendMessage(MSG.Input, btoa(binary));
+  }
+
   sendWheel(up, ticks = 1) {
     // SGR mouse wheel (button 64 = up, 65 = down) at the center of the screen.
     const btn = up ? 64 : 65;
     const col = Math.max(1, Math.floor(this.terminal.cols / 2));
     const row = Math.max(1, Math.floor(this.terminal.rows / 2));
-    let seq = '';
-    for (let i = 0; i < ticks; i++) {
-      seq += `\x1b[<${btn};${col};${row}M`;
-    }
-    const bytes = this.encoder.encode(seq);
-    const binary = String.fromCharCode(...bytes);
-    this.sendMessage(MSG.Input, btoa(binary));
+    this.sendInput(`\x1b[<${btn};${col};${row}M`.repeat(ticks));
   }
 
   setupTouchHandling() {
@@ -228,6 +219,7 @@ class WebTmux {
         if (this.isMouseApp()) {
           // Full-screen app (e.g. Claude Code): forward wheel ticks so it
           // scrolls its own view instead of using tmux copy mode.
+          if (this.inCopyMode) this.exitCopyMode();
           const ticks = Math.min(8, Math.max(1, Math.floor(Math.abs(deltaY) / 30)));
           this.sendWheel(deltaY < 0, ticks);
           touchStartY = e.touches[0].clientY;
@@ -258,6 +250,7 @@ class WebTmux {
       // Full-screen apps with mouse tracking handle their own scrolling; let
       // xterm forward the wheel to them instead of hijacking into copy mode.
       if (this.isMouseApp()) {
+        if (this.inCopyMode) this.exitCopyMode();
         return true;
       }
 
@@ -293,6 +286,7 @@ class WebTmux {
 
     this.ws.onopen = () => {
       console.log('WebSocket connected');
+      this.reconnectDelay = 500;
 
       // Send auth token
       const authToken = window.gotty_auth_token || '';
@@ -324,14 +318,16 @@ class WebTmux {
     this.ws.onclose = () => {
       console.log('WebSocket closed');
 
-      // Reconnect to the SAME session we were on. The old code bounced to a
-      // different session on any drop, so a transient (e.g. scroll-induced)
-      // disconnect looked like "losing" the current tty.
+      // Reconnect to the SAME session we were on (re-switching is safe now: a
+      // failed switch no longer drops the connection). Back off exponentially
+      // so a down server is not hammered every 500ms.
       const active = this.layout?.sessions?.find(s => s.active)?.name;
       if (active) {
         this.pendingSessionSwitch = active;
       }
-      setTimeout(() => this.connect(), 500);
+      const delay = this.reconnectDelay || 500;
+      this.reconnectDelay = Math.min(delay * 2, 10000);
+      setTimeout(() => this.connect(), delay);
     };
 
     this.ws.onerror = (error) => {
@@ -392,6 +388,11 @@ class WebTmux {
         this.inCopyMode = modeState.inCopyMode;
         break;
 
+      case MSG.TmuxError:
+        console.error('tmux error:', payload);
+        window.dispatchEvent(new CustomEvent('tmux-error', { detail: payload }));
+        break;
+
       default:
         console.warn('Unknown message type:', type);
     }
@@ -449,10 +450,14 @@ class WebTmux {
 
   renameSession(target, newName) {
     if (!target || !newName) return;
-    this.sendMessage(MSG.TmuxRenameSession, target + '\n' + newName);
+    // The wire format delimits target/newName with "\n", so strip newlines.
+    const t = target.replace(/[\r\n]/g, '');
+    const n = newName.replace(/[\r\n]/g, '');
+    this.sendMessage(MSG.TmuxRenameSession, t + '\n' + n);
   }
 
   enterCopyMode() {
+    if (this.inCopyMode) return;
     this.sendMessage(MSG.TmuxCopyMode, '1');
     this.inCopyMode = true;
   }
@@ -464,20 +469,17 @@ class WebTmux {
 
   // --- Voice control dispatch -------------------------------------------------
 
+  _scroll(msgType, lines) {
+    this.enterCopyMode();
+    this.sendMessage(msgType, String(lines));
+  }
+
   scrollUp(lines = 3) {
-    if (!this.inCopyMode) {
-      this.sendMessage(MSG.TmuxCopyMode, '1');
-      this.inCopyMode = true;
-    }
-    this.sendMessage(MSG.TmuxScrollUp, String(lines));
+    this._scroll(MSG.TmuxScrollUp, lines);
   }
 
   scrollDown(lines = 3) {
-    if (!this.inCopyMode) {
-      this.sendMessage(MSG.TmuxCopyMode, '1');
-      this.inCopyMode = true;
-    }
-    this.sendMessage(MSG.TmuxScrollDown, String(lines));
+    this._scroll(MSG.TmuxScrollDown, lines);
   }
 
   // dictate types verbatim text through the normal input path (onData -> PTY).
@@ -517,6 +519,19 @@ class WebTmux {
     }
   }
 
+  // copyToClipboard writes text to the clipboard. The write needs a user gesture
+  // on some browsers (notably iOS Safari) and the voice flow runs after an async
+  // fetch, so on failure we hand the text to a tap-to-copy fallback overlay.
+  copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {
+        window.dispatchEvent(new CustomEvent('voice-copy-fallback', { detail: text }));
+      });
+    } else {
+      window.dispatchEvent(new CustomEvent('voice-copy-fallback', { detail: text }));
+    }
+  }
+
   // dispatchVoiceAction executes one validated action from the /voice endpoint.
   // The allowlist is enforced again here: unknown types are ignored.
   dispatchVoiceAction(action) {
@@ -548,13 +563,16 @@ class WebTmux {
         break;
       }
       case 'scroll':
-        if (action.dir === 'down') this.scrollDown(action.amount || 3);
-        else this.scrollUp(action.amount || 3);
+        if (this.isMouseApp()) {
+          this.sendWheel(action.dir !== 'down', action.amount || 3);
+        } else if (action.dir === 'down') {
+          this.scrollDown(action.amount || 3);
+        } else {
+          this.scrollUp(action.amount || 3);
+        }
         break;
       case 'copy':
-        if (action.text) {
-          navigator.clipboard.writeText(action.text).catch(e => console.warn('Copy failed:', e));
-        }
+        if (action.text) this.copyToClipboard(action.text);
         break;
       case 'paste':
         this.paste();

@@ -75,9 +75,28 @@ func (server *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	action = voice.Validate(action, sessions, transcript)
 
 	// copy is the one action that needs server-side tmux: read the pane and hand
-	// the text back so the browser can put it on the device clipboard.
+	// the text back so the browser can put it on the device clipboard. Capture
+	// the session the requesting client is actually viewing (sent as "session"),
+	// which can differ from the shared controller's current session; validate it
+	// against the live session list before use.
 	if action.Type == "copy" && server.tmuxCtrl != nil {
-		text, err := server.tmuxCtrl.CapturePane(action.Scope == "all")
+		all := action.Scope == "all"
+		clientSession := r.FormValue("session")
+		valid := false
+		for _, s := range sessions {
+			if s == clientSession {
+				valid = true
+				break
+			}
+		}
+
+		var text string
+		var err error
+		if valid {
+			text, err = server.tmuxCtrl.CapturePaneOf(clientSession, all)
+		} else {
+			text, err = server.tmuxCtrl.CapturePane(all)
+		}
 		if err != nil {
 			log.Printf("voice: capture-pane failed: %v", err)
 		} else {

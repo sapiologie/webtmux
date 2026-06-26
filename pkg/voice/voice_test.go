@@ -60,10 +60,10 @@ func TestValidateCopyDefaultsToScreen(t *testing.T) {
 	}
 }
 
-func TestValidateNewSessionSanitizes(t *testing.T) {
-	got := Validate(Action{Type: "new_session", Target: "my build.server"}, nil, "t")
-	if got.Type != "new_session" || got.Target != "my-build-server" {
-		t.Fatalf("expected sanitized new_session name, got %+v", got)
+func TestValidateNewSessionPassesNameThrough(t *testing.T) {
+	got := Validate(Action{Type: "new_session", Target: "  build server "}, nil, "t")
+	if got.Type != "new_session" || got.Target != "build server" {
+		t.Fatalf("expected trimmed new_session name, got %+v", got)
 	}
 
 	if Validate(Action{Type: "new_session", Target: "   "}, nil, "t").Type != "dictate" {
@@ -71,9 +71,9 @@ func TestValidateNewSessionSanitizes(t *testing.T) {
 	}
 }
 
-func TestValidateRenameSessionSanitizes(t *testing.T) {
-	got := Validate(Action{Type: "rename_session", Target: "api:v2"}, nil, "t")
-	if got.Type != "rename_session" || got.Target != "api-v2" {
-		t.Fatalf("expected sanitized rename, got %+v", got)
+func TestValidateRenameSessionPassesNameThrough(t *testing.T) {
+	got := Validate(Action{Type: "rename_session", Target: "api v2"}, nil, "t")
+	if got.Type != "rename_session" || got.Target != "api v2" {
+		t.Fatalf("expected trimmed rename name, got %+v", got)
 	}
 }

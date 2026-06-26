@@ -206,7 +206,7 @@ func (server *Server) handleTmuxEvents(ctx context.Context, tty *webtty.WebTTY) 
 			currentLayout := string(data)
 			if currentLayout != lastLayout {
 				lastLayout = currentLayout
-				if err := tty.SendTmuxLayout(); err != nil {
+				if err := tty.SendTmuxLayoutData(data); err != nil {
 					log.Printf("Failed to send tmux layout: %v", err)
 				}
 			}

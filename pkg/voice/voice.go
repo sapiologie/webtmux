@@ -28,7 +28,7 @@ type Action struct {
 	Text   string `json:"text,omitempty"`
 	Target string `json:"target,omitempty"`
 	Name   string `json:"name,omitempty"`
-	Index  int    `json:"index,omitempty"`
+	Index  int    `json:"index"`
 	Dir    string `json:"dir,omitempty"`
 	Amount int    `json:"amount,omitempty"`
 	Scope  string `json:"scope,omitempty"`
@@ -235,19 +235,14 @@ func Validate(a Action, sessions []string, transcript string) Action {
 		}
 		return Action{Type: "switch_session", Target: target}
 
-	case "new_session":
-		name := sanitizeSessionName(a.Target)
+	case "new_session", "rename_session":
+		// The controller sanitizes the name at execution time; here we only
+		// confirm there is something to name, else fall back to dictation.
+		name := strings.TrimSpace(a.Target)
 		if name == "" {
 			return dictate
 		}
-		return Action{Type: "new_session", Target: name}
-
-	case "rename_session":
-		name := sanitizeSessionName(a.Target)
-		if name == "" {
-			return dictate
-		}
-		return Action{Type: "rename_session", Target: name}
+		return Action{Type: a.Type, Target: name}
 
 	case "select_window":
 		if a.Index < 0 {
@@ -289,32 +284,13 @@ func matchSession(target string, sessions []string) string {
 	if target == "" {
 		return ""
 	}
+	// Exact (case-insensitive) match only. The router is given the live session
+	// list and returns a real name; a loose substring match could resolve to the
+	// wrong session when one name is a substring of another (app2 vs app2-207).
 	for _, s := range sessions {
 		if strings.ToLower(s) == target {
 			return s
 		}
 	}
-	for _, s := range sessions {
-		ls := strings.ToLower(s)
-		if strings.Contains(target, ls) || strings.Contains(ls, target) {
-			return s
-		}
-	}
 	return ""
-}
-
-// sanitizeSessionName turns a spoken session name into a tmux-safe name. tmux
-// uses '.' and ':' in its target syntax and spaces are awkward, so collapse
-// those to '-'.
-func sanitizeSessionName(name string) string {
-	name = strings.TrimSpace(name)
-	name = strings.Map(func(r rune) rune {
-		switch r {
-		case '.', ':', ' ', '\t':
-			return '-'
-		default:
-			return r
-		}
-	}, name)
-	return strings.Trim(name, "-")
 }
