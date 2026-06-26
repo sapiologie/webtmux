@@ -16,4 +16,7 @@ Thumbs.db
 # Local build (not cross-compiled)
 /webtmux
 
+# Local secrets (voice control)
+.env
+
 # Don't ignore builds/ - we want prebuilt binaries in repo

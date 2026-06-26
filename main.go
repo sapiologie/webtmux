@@ -21,6 +21,8 @@ import (
 )
 
 func main() {
+	loadDotEnv(".env")
+
 	app := cli.NewApp()
 	app.Name = "webtmux"
 	app.Version = Version
@@ -210,4 +212,51 @@ func generateRandomPassword(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)[:length]
+}
+
+// loadDotEnv loads KEY=VALUE pairs from a .env file in the current directory
+// into the process environment, without overriding variables that are already
+// set (a real export still wins). Blank lines and lines starting with # are
+// ignored; values may be wrapped in single or double quotes and may carry a
+// leading "export ". A missing file is not an error. This lets `./webtmux` pick
+// up MISTRAL_API_KEY from .env instead of a manual export.
+func loadDotEnv(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	loaded := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+
+		key, val, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		if len(val) >= 2 {
+			first, last := val[0], val[len(val)-1]
+			if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		os.Setenv(key, val)
+		loaded++
+	}
+
+	if loaded > 0 {
+		log.Printf("Loaded %d variable(s) from %s", loaded, path)
+	}
 }
