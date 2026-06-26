@@ -281,6 +281,25 @@ class WebtmuxMobileControls extends LitElement {
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
       word-break: break-word;
     }
+
+    /* On touch devices the bar sits at the top of the screen (see index.html),
+       so pop the toast and pane selector downward into the screen instead of
+       upward off the top edge. */
+    @media (pointer: coarse) {
+      .voice-toast {
+        top: 100%;
+        bottom: auto;
+        margin-top: 8px;
+        margin-bottom: 0;
+      }
+
+      .pane-selector {
+        top: 100%;
+        bottom: auto;
+        border-top: none;
+        border-bottom: 1px solid #0f3460;
+      }
+    }
   `;
 
   constructor() {

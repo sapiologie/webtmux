@@ -31,6 +31,13 @@
       display: flex;
       width: 100%;
     }
+    /* On touch devices the on-screen keyboard covers the bottom of the screen,
+       so move the controls bar to the top there. Desktop keeps it at the bottom. */
+    @media (pointer: coarse) {
+      body {
+        flex-direction: column-reverse;
+      }
+    }
     #terminal-container {
       flex: 1;
       min-width: 0;
