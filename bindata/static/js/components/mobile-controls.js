@@ -8,6 +8,7 @@ class WebtmuxMobileControls extends LitElement {
     layout: { type: Object },
     recording: { type: Boolean },
     voiceStatus: { type: String },
+    showHelp: { type: Boolean },
   };
 
   static styles = css`
@@ -282,6 +283,32 @@ class WebtmuxMobileControls extends LitElement {
       word-break: break-word;
     }
 
+    .help-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .help-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: #1a1a2e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+
+    .help-say {
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .help-do {
+      color: #888;
+      font-size: 12px;
+    }
+
     /* On touch devices the bar sits at the top of the screen (see index.html),
        so pop the toast and pane selector downward into the screen instead of
        upward off the top edge. */
@@ -309,6 +336,7 @@ class WebtmuxMobileControls extends LitElement {
     this.layout = null;
     this.recording = false;
     this.voiceStatus = '';
+    this.showHelp = false;
     this._mediaRecorder = null;
     this._chunks = [];
     this._stream = null;
@@ -338,6 +366,23 @@ class WebtmuxMobileControls extends LitElement {
                 <span class="session-meta">${sess.windows} window${sess.windows !== 1 ? 's' : ''}</span>
               </button>
             `)}
+          </div>
+        </div>
+      </div>
+
+      <!-- Help overlay: available voice commands -->
+      <div class="session-overlay ${this.showHelp ? 'open' : ''}" @click=${this.closeHelp}>
+        <div class="session-modal" @click=${(e) => e.stopPropagation()}>
+          <h3>Voice commands</h3>
+          <div class="help-list">
+            <div class="help-item"><span class="help-say">Just speak</span><span class="help-do">types exactly what you say</span></div>
+            <div class="help-item"><span class="help-say">"submit" / "press enter"</span><span class="help-do">presses Enter</span></div>
+            <div class="help-item"><span class="help-say">"scroll up" / "scroll down"</span><span class="help-do">scrolls the history</span></div>
+            <div class="help-item"><span class="help-say">"switch to session two"</span><span class="help-do">switches tmux session</span></div>
+            <div class="help-item"><span class="help-say">"copy the screen" / "copy all"</span><span class="help-do">copies to the clipboard</span></div>
+            <div class="help-item"><span class="help-say">"paste"</span><span class="help-do">pastes the clipboard</span></div>
+            <div class="help-item"><span class="help-say">"press escape" / "interrupt"</span><span class="help-do">Esc / Ctrl-C</span></div>
+            <div class="help-item"><span class="help-say">"press tab"</span><span class="help-do">Tab</span></div>
           </div>
         </div>
       </div>
@@ -385,6 +430,15 @@ class WebtmuxMobileControls extends LitElement {
             <line x1="12" y1="19" x2="12" y2="22"/>
           </svg>
           ${this.recording ? 'Rec' : 'Voice'}
+        </button>
+
+        <button class="control-btn" @click=${this.toggleHelp}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          Help
         </button>
 
         ${showSessionBtn ? html`
@@ -593,6 +647,14 @@ class WebtmuxMobileControls extends LitElement {
     if (timeout > 0) {
       this._statusTimer = setTimeout(() => { this.voiceStatus = ''; }, timeout);
     }
+  }
+
+  toggleHelp() {
+    this.showHelp = !this.showHelp;
+  }
+
+  closeHelp() {
+    this.showHelp = false;
   }
 }
 
