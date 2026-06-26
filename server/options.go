@@ -35,6 +35,13 @@ type Options struct {
 	EnableWebGL         bool   `hcl:"enable_webgl" flagName:"enable-webgl" flagDescribe:"Enable WebGL renderer" default:"true"`
 	Quiet               bool   `hcl:"quiet" flagName:"quiet" flagDescribe:"Don't log" default:"false"`
 
+	// Voice control (Mistral). Populated from explicit flags in main.go; left
+	// untagged so the reflection-based flag generator and default applier skip
+	// them.
+	MistralAPIKey      string
+	MistralModel       string
+	MistralRouterModel string
+
 	TitleVariables map[string]interface{}
 }
 

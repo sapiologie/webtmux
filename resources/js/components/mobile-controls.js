@@ -6,6 +6,8 @@ class WebtmuxMobileControls extends LitElement {
     showPaneSelector: { type: Boolean },
     showSessionSelector: { type: Boolean },
     layout: { type: Object },
+    recording: { type: Boolean },
+    voiceStatus: { type: String },
   };
 
   static styles = css`
@@ -247,6 +249,41 @@ class WebtmuxMobileControls extends LitElement {
       border-color: #4a9eff;
       color: #fff;
     }
+
+    .control-btn.mic {
+      background: #2d6a4f;
+      border-color: #2d6a4f;
+      color: #fff;
+      touch-action: none;
+    }
+
+    .control-btn.mic.recording {
+      background: #e94560;
+      border-color: #e94560;
+      animation: mic-pulse 1s ease-in-out infinite;
+    }
+
+    @keyframes mic-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .voice-toast {
+      position: absolute;
+      bottom: 100%;
+      left: 8px;
+      right: 8px;
+      margin-bottom: 8px;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 8px;
+      color: #eaeaea;
+      padding: 10px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      word-break: break-word;
+    }
   `;
 
   constructor() {
@@ -254,6 +291,12 @@ class WebtmuxMobileControls extends LitElement {
     this.showPaneSelector = false;
     this.showSessionSelector = false;
     this.layout = null;
+    this.recording = false;
+    this.voiceStatus = '';
+    this._mediaRecorder = null;
+    this._chunks = [];
+    this._stream = null;
+    this._statusTimer = null;
 
     window.addEventListener('tmux-layout-update', (e) => {
       this.layout = e.detail;
@@ -310,7 +353,24 @@ class WebtmuxMobileControls extends LitElement {
         </div>
       ` : ''}
 
+      ${this.voiceStatus ? html`<div class="voice-toast">${this.voiceStatus}</div>` : ''}
+
       <div class="controls">
+        <button
+          class="control-btn mic ${this.recording ? 'recording' : ''}"
+          @pointerdown=${this.startRecording}
+          @pointerup=${this.stopRecording}
+          @pointercancel=${this.stopRecording}
+          @contextmenu=${(e) => e.preventDefault()}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="2" width="6" height="11" rx="3"/>
+            <path d="M5 10v1a7 7 0 0 0 14 0v-1"/>
+            <line x1="12" y1="19" x2="12" y2="22"/>
+          </svg>
+          ${this.recording ? 'Rec' : 'Voice'}
+        </button>
+
         ${showSessionBtn ? html`
           <button class="control-btn session-btn" @click=${this.toggleSessionSelector}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -406,6 +466,117 @@ class WebtmuxMobileControls extends LitElement {
   switchSession(sessionName) {
     window.webtmux?.switchSession(sessionName);
     this.showSessionSelector = false;
+  }
+
+  // --- Voice (push-to-talk) ---------------------------------------------------
+
+  async startRecording(e) {
+    if (e) e.preventDefault();
+    if (this.recording) return;
+
+    // Keep receiving pointer events even if the finger slides off the button.
+    if (e && e.pointerId != null && e.target.setPointerCapture) {
+      try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this.flashStatus('Mic unavailable (needs HTTPS)');
+      return;
+    }
+
+    try {
+      this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      this.flashStatus('Mic access denied');
+      return;
+    }
+
+    this._chunks = [];
+    let mimeType = '';
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) {
+        mimeType = c;
+        break;
+      }
+    }
+
+    try {
+      this._mediaRecorder = mimeType
+        ? new MediaRecorder(this._stream, { mimeType })
+        : new MediaRecorder(this._stream);
+    } catch (err) {
+      this._mediaRecorder = new MediaRecorder(this._stream);
+    }
+
+    this._mediaRecorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) this._chunks.push(ev.data);
+    };
+    this._mediaRecorder.onstop = () => this.uploadRecording();
+    this._mediaRecorder.start();
+    this.recording = true;
+  }
+
+  stopRecording(e) {
+    if (e) e.preventDefault();
+    if (!this.recording) return;
+    this.recording = false;
+    if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+      this._mediaRecorder.stop();
+    }
+  }
+
+  async uploadRecording() {
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+      this._stream = null;
+    }
+    if (!this._chunks.length) return;
+
+    const type = (this._mediaRecorder && this._mediaRecorder.mimeType) || 'audio/webm';
+    const blob = new Blob(this._chunks, { type });
+    this._chunks = [];
+    const ext = (type.includes('mp4') || type.includes('aac')) ? 'mp4' : 'webm';
+
+    const form = new FormData();
+    form.append('audio', blob, `voice.${ext}`);
+
+    this.flashStatus('Transcribing...', 0);
+    try {
+      const resp = await fetch('./voice', { method: 'POST', body: form });
+      if (!resp.ok) {
+        this.flashStatus('Voice error: ' + resp.status);
+        return;
+      }
+      const data = await resp.json();
+      this.flashStatus(`"${data.transcript}" -> ${this.describeAction(data.action)}`);
+      window.webtmux?.dispatchVoiceAction(data.action);
+    } catch (err) {
+      this.flashStatus('Voice request failed');
+    }
+  }
+
+  describeAction(a) {
+    if (!a) return 'nothing';
+    switch (a.type) {
+      case 'dictate': return 'type';
+      case 'submit': return 'submit';
+      case 'key': return 'key ' + a.name;
+      case 'switch_session': return 'session ' + a.target;
+      case 'select_window': return 'window ' + a.index;
+      case 'scroll': return 'scroll ' + a.dir;
+      case 'copy': return 'copy';
+      case 'paste': return 'paste';
+      default: return a.type;
+    }
+  }
+
+  flashStatus(msg, timeout = 4000) {
+    this.voiceStatus = msg;
+    if (this._statusTimer) clearTimeout(this._statusTimer);
+    if (timeout > 0) {
+      this._statusTimer = setTimeout(() => { this.voiceStatus = ''; }, timeout);
+    }
   }
 }
 

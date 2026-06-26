@@ -49,6 +49,23 @@ func main() {
 			Usage:   "Config file path",
 			EnvVars: []string{"GOTTY_CONFIG"},
 		},
+		&cli.StringFlag{
+			Name:    "mistral-api-key",
+			Usage:   "Mistral API key enabling voice control (push-to-talk)",
+			EnvVars: []string{"MISTRAL_API_KEY"},
+		},
+		&cli.StringFlag{
+			Name:    "mistral-model",
+			Value:   "voxtral-mini-latest",
+			Usage:   "Mistral transcription model",
+			EnvVars: []string{"MISTRAL_MODEL"},
+		},
+		&cli.StringFlag{
+			Name:    "mistral-router-model",
+			Value:   "mistral-small-latest",
+			Usage:   "Mistral model that routes transcripts to terminal actions",
+			EnvVars: []string{"MISTRAL_ROUTER_MODEL"},
+		},
 	)
 
 	app.Action = func(c *cli.Context) error {
@@ -67,6 +84,13 @@ func main() {
 		}
 
 		utils.ApplyFlags(cliFlags, flagMappings, c, appOptions, backendOptions)
+
+		appOptions.MistralAPIKey = c.String("mistral-api-key")
+		appOptions.MistralModel = c.String("mistral-model")
+		appOptions.MistralRouterModel = c.String("mistral-router-model")
+		if appOptions.MistralAPIKey != "" {
+			log.Printf("Voice control enabled (transcribe: %s, router: %s)", appOptions.MistralModel, appOptions.MistralRouterModel)
+		}
 
 		if appOptions.Quiet {
 			log.SetFlags(0)

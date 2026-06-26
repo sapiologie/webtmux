@@ -289,6 +289,17 @@ func (c *Controller) NewWindow() error {
 	return nil
 }
 
+// CapturePane returns the text content of the active pane of the current
+// session. If all is true the entire scrollback history is captured, otherwise
+// only the visible screen.
+func (c *Controller) CapturePane(all bool) (string, error) {
+	args := []string{"capture-pane", "-p", "-t", c.sessionName}
+	if all {
+		args = append(args, "-S", "-")
+	}
+	return c.runTmux(args...)
+}
+
 // runTmux executes a tmux command with the given arguments
 func (c *Controller) runTmux(args ...string) (string, error) {
 	cmd := exec.Command("tmux", args...)
@@ -298,4 +309,3 @@ func (c *Controller) runTmux(args ...string) (string, error) {
 	}
 	return string(output), nil
 }
-

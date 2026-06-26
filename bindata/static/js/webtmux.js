@@ -416,6 +416,100 @@ class WebTmux {
     this.inCopyMode = false;
   }
 
+  // --- Voice control dispatch -------------------------------------------------
+
+  scrollUp(lines = 3) {
+    if (!this.inCopyMode) {
+      this.sendMessage(MSG.TmuxCopyMode, '1');
+      this.inCopyMode = true;
+    }
+    this.sendMessage(MSG.TmuxScrollUp, String(lines));
+  }
+
+  scrollDown(lines = 3) {
+    if (!this.inCopyMode) {
+      this.sendMessage(MSG.TmuxCopyMode, '1');
+      this.inCopyMode = true;
+    }
+    this.sendMessage(MSG.TmuxScrollDown, String(lines));
+  }
+
+  // dictate types verbatim text through the normal input path (onData -> PTY).
+  dictate(text) {
+    if (!text) return;
+    if (this.inCopyMode) this.exitCopyMode();
+    this.terminal.input(text);
+  }
+
+  sendKey(name) {
+    const KEYMAP = {
+      enter: '\r',
+      escape: '\x1b',
+      ctrl_c: '\x03',
+      tab: '\t',
+      backspace: '\x7f',
+      up: '\x1b[A',
+      down: '\x1b[B',
+      right: '\x1b[C',
+      left: '\x1b[D',
+    };
+    const seq = KEYMAP[name];
+    if (!seq) return;
+    if (this.inCopyMode) this.exitCopyMode();
+    this.terminal.input(seq);
+  }
+
+  async paste() {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        if (this.inCopyMode) this.exitCopyMode();
+        this.terminal.input(text);
+      }
+    } catch (e) {
+      console.warn('Paste failed:', e);
+    }
+  }
+
+  // dispatchVoiceAction executes one validated action from the /voice endpoint.
+  // The allowlist is enforced again here: unknown types are ignored.
+  dispatchVoiceAction(action) {
+    if (!action || !action.type) return;
+    switch (action.type) {
+      case 'dictate':
+        this.dictate(action.text);
+        break;
+      case 'submit':
+        this.sendKey('enter');
+        break;
+      case 'key':
+        this.sendKey(action.name);
+        break;
+      case 'switch_session':
+        if (action.target) this.switchSession(action.target);
+        break;
+      case 'select_window': {
+        const win = this.layout?.windows?.find(w => w.index === action.index);
+        if (win) this.selectWindow(win.id);
+        break;
+      }
+      case 'scroll':
+        if (action.dir === 'down') this.scrollDown(action.amount || 3);
+        else this.scrollUp(action.amount || 3);
+        break;
+      case 'copy':
+        if (action.text) {
+          navigator.clipboard.writeText(action.text).catch(e => console.warn('Copy failed:', e));
+        }
+        break;
+      case 'paste':
+        this.paste();
+        break;
+      default:
+        console.warn('Unknown voice action:', action.type);
+    }
+  }
+
   // Handle OSC 52 clipboard sequences from tmux
   // Format: ESC ] 52 ; Pc ; Pd BEL  or  ESC ] 52 ; Pc ; Pd ESC \
   handleOSC52(data) {
